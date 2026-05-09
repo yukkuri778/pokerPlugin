@@ -1,0 +1,11 @@
+name: PokerPlugin
+version: '1.0-SNAPSHOT'
+main: com.example.poker.PokerPlugin
+api-version: '1.21'
+commands:
+  poker:
+    description: ポーカーテーブル管理コマンド
+    usage: /poker <create>
+  pokeraction:
+    description: ポーカーアクション用内部コマンド
+

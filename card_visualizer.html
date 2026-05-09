@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Card Transformation Visualizer</title>
+<style>
+  body { background:#1a1a2e; color:#eee; font-family:monospace; padding:20px; }
+  canvas { border:1px solid #555; background:#111; }
+  .row { display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; }
+  .panel { background:#16213e; border-radius:8px; padding:16px; }
+  h2 { color:#e94560; margin:0 0 10px; }
+  .info { font-size:12px; line-height:1.8; }
+  .ok { color:#4ade80; }
+  .warn { color:#facc15; }
+  .err { color:#f87171; }
+</style>
+</head>
+<body>
+<h1 style="color:#e94560">Minecraft Card Transformation Visualizer</h1>
+<div class="row">
+  <!-- 真上から見た図（XZ平面） -->
+  <div class="panel">
+    <h2>真上から見た図（XZ平面）</h2>
+    <canvas id="topView" width="500" height="400"></canvas>
+  </div>
+  <!-- 正面から見た図（XY平面） -->
+  <div class="panel">
+    <h2>正面から見た図（XY平面）</h2>
+    <canvas id="frontView" width="500" height="400"></canvas>
+  </div>
+</div>
+<div class="panel" style="margin-top:20px; max-width:900px;">
+  <h2>解析結果</h2>
+  <div class="info" id="analysis"></div>
+</div>
+
+<script>
+// ============================================================
+// Minecraftのtransformation配列を解析する
+// NBT配列はJOMLのMatrix4f内部順（列優先: m00,m01,m02,m03, m10,...）
+// 行列作用: result = M * [x,y,z,1]^T
+// ============================================================
+
+// 行列を変換して点を求める（列優先格納から行列計算）
+// NBT配列インデックス: [m00,m01,m02,m03, m10,m11,m12,m13, m20,m21,m22,m23, m30,m31,m32,m33]
+// ← JOMLではfirst indexがcol, second indexがrow
+// つまり配列要素: col0=[f0..f3], col1=[f4..f7], col2=[f8..f11], col3=[f12..f15]
+// 行列:
+//   row0: f0  f4  f8  f12
+//   row1: f1  f5  f9  f13
+//   row2: f2  f6  f10 f14
+//   row3: f3  f7  f11 f15
+function transformPoint(f, x, y, z) {
+  // row-major multiply
+  const nx = f[0]*x + f[4]*y + f[8]*z  + f[12];
+  const ny = f[1]*x + f[5]*y + f[9]*z  + f[13];
+  const nz = f[2]*x + f[6]*y + f[10]*z + f[14];
+  return [nx, ny, nz];
+}
+
+// ブロックdisplayのtransformation (NBT配列)
+const bgF = [0,0.6875,0,0.152500006, 0,0,0.022875,0, 0.4375,0,0,0.2773750018, 0,0,0,1];
+
+// ブロック(unit cube [0,1]^3)の8頂点を変換
+function blockCorners(f) {
+  const corners = [];
+  for (let x of [0,1]) for (let y of [0,1]) for (let z of [0,1])
+    corners.push(transformPoint(f, x, y, z));
+  return corners;
+}
+
+const bgCorners = blockCorners(bgF);
+
+// カードのXZ範囲を求める
+const bgX = bgCorners.map(c=>c[0]);
+const bgY = bgCorners.map(c=>c[1]);
+const bgZ = bgCorners.map(c=>c[2]);
+const cardXMin = Math.min(...bgX), cardXMax = Math.max(...bgX);
+const cardYMin = Math.min(...bgY), cardYMax = Math.max(...bgY);
+const cardZMin = Math.min(...bgZ), cardZMax = Math.max(...bgZ);
+
+// テキストエンティティの原点 (ローカル0,0,0を変換)
+const tlF  = [0,1,0,0.622500006, 0,0,0.366,0.02562, 1,0,0,0.3273750018, 0,0,0,1];
+const brF  = [0,-1,0,0.372500006, 0,0,0.366,0.02562, -1,0,0,0.6673750018, 0,0,0,1];
+const ctrF = [0,1.5,0,0.302500006, 0,0,0.549,0.02562, 1.5,0,0,0.4648750018, 0,0,0,1];
+
+const tlPos  = transformPoint(tlF,  0,0,0);
+const brPos  = transformPoint(brF,  0,0,0);
+const ctrPos = transformPoint(ctrF, 0,0,0);
+
+// ============================================================
+// 真上から見た図を描画（X:横, Z:縦）
+// ============================================================
+(function() {
+  const canvas = document.getElementById('topView');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const PAD = 60;
+
+  // スケールと変換関数
+  const worldW = 1.5, worldH = 1.5;
+  const scaleX = (W - PAD*2) / worldW;
+  const scaleZ = (H - PAD*2) / worldH;
+  const offsetX = -(-0.2), offsetZ = -(-0.1);
+
+  function toScreen(wx, wz) {
+    return [(wx + offsetX) * scaleX + PAD, (wz + offsetZ) * scaleZ + PAD];
+  }
+
+  ctx.clearRect(0,0,W,H);
+
+  // グリッド
+  ctx.strokeStyle='#333'; ctx.lineWidth=1;
+  for (let i=0; i<=15; i++) {
+    const x = PAD + i*(W-PAD*2)/15;
+    ctx.beginPath(); ctx.moveTo(x,PAD); ctx.lineTo(x,H-PAD); ctx.stroke();
+    const z = PAD + i*(H-PAD*2)/15;
+    ctx.beginPath(); ctx.moveTo(PAD,z); ctx.lineTo(W-PAD,z); ctx.stroke();
+  }
+
+  // 軸
+  const [ox, oz] = toScreen(0,0);
+  ctx.strokeStyle='#888'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(PAD,oz); ctx.lineTo(W-PAD,oz); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox,PAD); ctx.lineTo(ox,H-PAD); ctx.stroke();
+  ctx.fillStyle='#aaa'; ctx.font='14px monospace';
+  ctx.fillText('X+', W-PAD+4, oz+5);
+  ctx.fillText('Z+', ox+4, H-PAD+16);
+
+  // カード矩形（XZ平面投影）
+  const [sx1,sz1] = toScreen(cardXMin, cardZMin);
+  const [sx2,sz2] = toScreen(cardXMax, cardZMax);
+  ctx.fillStyle='rgba(255,255,255,0.15)';
+  ctx.fillRect(sx1, sz1, sx2-sx1, sz2-sz1);
+  ctx.strokeStyle='#fff'; ctx.lineWidth=2;
+  ctx.strokeRect(sx1, sz1, sx2-sx1, sz2-sz1);
+  ctx.fillStyle='#aaa'; ctx.font='11px monospace';
+  ctx.fillText(`W=${(cardXMax-cardXMin).toFixed(4)}`, sx1, sz1-4);
+  ctx.fillText(`D=${(cardZMax-cardZMin).toFixed(4)}`, sx2+4, (sz1+sz2)/2);
+
+  // カード中心
+  const [cxs,czs] = toScreen((cardXMin+cardXMax)/2, (cardZMin+cardZMax)/2);
+  ctx.strokeStyle='#555'; ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(sx1,czs); ctx.lineTo(sx2,czs); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cxs,sz1); ctx.lineTo(cxs,sz2); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // テキスト位置をプロット
+  function plotText(pos, label, color) {
+    const [sx,sz] = toScreen(pos[0], pos[2]);
+    ctx.fillStyle=color;
+    ctx.beginPath(); ctx.arc(sx,sz,7,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 13px monospace';
+    ctx.fillText(label, sx+10, sz+5);
+    // 中心からのズレ表示
+    const dx = pos[0] - (cardXMin+cardXMax)/2;
+    const dz = pos[2] - (cardZMin+cardZMax)/2;
+    ctx.fillStyle='#aaa'; ctx.font='10px monospace';
+    ctx.fillText(`Δx=${dx.toFixed(3)} Δz=${dz.toFixed(3)}`, sx+10, sz+18);
+  }
+
+  plotText(ctrPos, '♥ (center)', '#ef4444');
+  plotText(tlPos,  'A (top-left)', '#60a5fa');
+  plotText(brPos,  'A (bot-right)', '#34d399');
+
+  ctx.fillStyle='#e2e8f0'; ctx.font='12px monospace';
+  ctx.fillText('（真上から見た図）', PAD, PAD-6);
+})();
+
+// ============================================================
+// 正面から見た図を描画（X:横, Y:縦）
+// ============================================================
+(function() {
+  const canvas = document.getElementById('frontView');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const PAD = 60;
+
+  const worldW = 1.5, worldH = 0.3;
+  const scaleX = (W - PAD*2) / worldW;
+  const scaleY = (H - PAD*2) / worldH;
+  const offsetX = 0.1, offsetY = -0.01;
+
+  function toScreen(wx, wy) {
+    return [(wx + offsetX) * scaleX + PAD, H - PAD - (wy + offsetY) * scaleY];
+  }
+
+  ctx.clearRect(0,0,W,H);
+
+  // グリッド
+  ctx.strokeStyle='#333'; ctx.lineWidth=1;
+  for (let i=0; i<=15; i++) {
+    const x = PAD + i*(W-PAD*2)/15;
+    ctx.beginPath(); ctx.moveTo(x,PAD); ctx.lineTo(x,H-PAD); ctx.stroke();
+  }
+  for (let i=0; i<=10; i++) {
+    const y = PAD + i*(H-PAD*2)/10;
+    ctx.beginPath(); ctx.moveTo(PAD,y); ctx.lineTo(W-PAD,y); ctx.stroke();
+  }
+
+  // 軸ラベル
+  ctx.fillStyle='#aaa'; ctx.font='14px monospace';
+  ctx.fillText('X+', W-PAD+4, H-PAD);
+  ctx.fillText('Y+', PAD-40, PAD+5);
+
+  // カード本体のY範囲（非常に薄い！）
+  const [bx1,by1] = toScreen(cardXMin, cardYMin);
+  const [bx2,by2] = toScreen(cardXMax, cardYMax);
+  ctx.fillStyle='rgba(255,255,255,0.2)';
+  ctx.fillRect(bx1, by2, bx2-bx1, by1-by2);
+  ctx.strokeStyle='#fff'; ctx.lineWidth=2;
+  ctx.strokeRect(bx1, by2, bx2-bx1, by1-by2);
+
+  // Y範囲ラベル
+  ctx.fillStyle='#fff'; ctx.font='11px monospace';
+  ctx.fillText(`厚さ Y=${(cardYMax-cardYMin).toFixed(5)}`, bx2+4, (by1+by2)/2);
+
+  // テキスト位置
+  function plotText(pos, label, color) {
+    const [sx,sy] = toScreen(pos[0], pos[1]);
+    ctx.fillStyle=color;
+    ctx.beginPath(); ctx.arc(sx,sy,7,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 12px monospace';
+    ctx.fillText(label, sx+10, sy+5);
+  }
+
+  plotText(ctrPos, '♥', '#ef4444');
+  plotText(tlPos,  'A (TL)', '#60a5fa');
+  plotText(brPos,  'A (BR)', '#34d399');
+
+  ctx.fillStyle='#e2e8f0'; ctx.font='12px monospace';
+  ctx.fillText('（正面から見た図 = カードは寝ている!）', PAD, PAD-6);
+})();
+
+// ============================================================
+// 解析結果テキスト
+// ============================================================
+(function() {
+  const cardW = cardXMax - cardXMin;
+  const cardH = cardYMax - cardYMin;
+  const cardD = cardZMax - cardZMin;
+  const cardCX = (cardXMin+cardXMax)/2;
+  const cardCZ = (cardZMin+cardZMax)/2;
+
+  const dCtrX = ctrPos[0] - cardCX;
+  const dCtrZ = ctrPos[2] - cardCZ;
+
+  const isFlat = cardH < 0.1;
+  const isCentered = Math.abs(dCtrX) < 0.05 && Math.abs(dCtrZ) < 0.05;
+  const aspectRatio = cardD / cardW; // portrait = >1
+
+  let html = '';
+
+  html += `<b>■ カード本体 (白コンクリート)</b><br>`;
+  html += `  X幅: ${cardW.toFixed(4)} blocks<br>`;
+  html += `  Y高: <span class="${isFlat?'err':'ok'}">${cardH.toFixed(6)} blocks ← ${isFlat?'⚠ 非常に薄い！カードが寝ている':'OK 立っている'}</span><br>`;
+  html += `  Z奥: ${cardD.toFixed(4)} blocks<br>`;
+  html += `  アスペクト比(D/W): <span class="${aspectRatio<1?'warn':'ok'}">${aspectRatio.toFixed(3)} ${aspectRatio<1?'← 横長（ランドスケープ）。通常のカードは縦長(>1)':'OK 縦長'}</span><br>`;
+  html += `<br>`;
+
+  html += `<b>■ カードの向き</b><br>`;
+  if (isFlat) {
+    html += `  <span class="err">⚠ カードは地面に寝ています（Y方向の厚みが${cardH.toFixed(5)}しかない）</span><br>`;
+    html += `  　立てたカードにするにはY方向に高さが必要です（例: Y≈1.2）<br>`;
+  } else {
+    html += `  <span class="ok">✓ カードは立っています</span><br>`;
+  }
+  html += `<br>`;
+
+  html += `<b>■ テキスト位置（XZ平面）</b><br>`;
+  html += `  カード中心: X=${cardCX.toFixed(4)}, Z=${cardCZ.toFixed(4)}<br>`;
+  html += `  ♥中心テキスト: X=${ctrPos[0].toFixed(4)}, Z=${ctrPos[2].toFixed(4)}`;
+  html += ` <span class="${isCentered?'ok':'err'}">${isCentered?'✓ 中央':'⚠ ズレあり ΔX='+dCtrX.toFixed(4)+' ΔZ='+dCtrZ.toFixed(4)}</span><br>`;
+  html += `  A(左上): X=${tlPos[0].toFixed(4)}, Z=${tlPos[2].toFixed(4)}<br>`;
+  html += `  A(右下): X=${brPos[0].toFixed(4)}, Z=${brPos[2].toFixed(4)}<br>`;
+  html += `<br>`;
+
+  html += `<b>■ テキストのY位置（カード面からの高さ）</b><br>`;
+  html += `  カード上面: Y=${cardYMax.toFixed(5)}<br>`;
+  html += `  テキストY: ${tlPos[1].toFixed(5)} (差: ${(tlPos[1]-cardYMax).toFixed(5)})<br>`;
+
+  document.getElementById('analysis').innerHTML = html;
+})();
+</script>
+</body>
+</html>
