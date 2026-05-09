@@ -1,0 +1,11 @@
+# Gradle
+build/
+.gradle/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# Other
+*.jar
