@@ -123,33 +123,39 @@ public class PokerTable {
 
     public Location getDealerLocation() {
         double dx = 0, dz = 0;
+        float yaw = 0f;
         // facing方向へ +3 の位置
         switch (facing) {
-            case EAST: dx = 3; break;
-            case WEST: dx = -3; break;
-            case SOUTH: dz = 3; break;
-            case NORTH: dz = -3; break;
+            case EAST: dx = 3; yaw = 180f; break;
+            case WEST: dx = -3; yaw = 0f; break;
+            case SOUTH: dz = 3; yaw = -90f; break;
+            case NORTH: dz = -3; yaw = 90f; break;
             default: break;
         }
-        return baseLocation.clone().add(dx, 1.0, dz); // 少し浮かせる
+        Location loc = baseLocation.clone().add(dx, 1.0, dz); // 少し浮かせる
+        loc.setYaw(yaw);
+        return loc;
     }
 
     public Location getCommunityCardLocation(int index) {
         // index: 0 ~ 4 (2が中央)
-        // カードの間隔を0.9ブロックとする
+        // カードの間隔を0.5ブロックとする
         double spacing = 0.5;
         double offset = (index - 2) * spacing;
         
         double dx = 0, dz = 0;
+        float yaw = 0f;
         // プレイヤーから見て横に並べる。EAST向きのテーブルなら、Z軸方向に並べる
         switch (facing) {
-            case EAST: dz = offset; break;
-            case WEST: dz = -offset; break;
-            case SOUTH: dx = -offset; break;
-            case NORTH: dx = offset; break;
+            case EAST: dz = offset; yaw = 180f; break;
+            case WEST: dz = -offset; yaw = 0f; break;
+            case SOUTH: dx = -offset; yaw = -90f; break;
+            case NORTH: dx = offset; yaw = 90f; break;
             default: dx = offset; break;
         }
-        return baseLocation.clone().add(dx, 1.0, dz); // テーブルの高さに合わせる
+        Location loc = baseLocation.clone().add(dx, 1.0, dz); // テーブルの高さに合わせる
+        loc.setYaw(yaw);
+        return loc;
     }
 
     public Location getHandCardLocation(int seatIndex, int cardIndex) {
