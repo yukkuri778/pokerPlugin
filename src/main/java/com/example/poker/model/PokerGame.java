@@ -23,8 +23,21 @@ public class PokerGame {
     private final int HAND_POPUP_SPEED = 5;         // 手札のアニメーション速度（tick）
 
     private int bbAmount = 20; // デフォルト
-    private int pot = 0;
+    public static class Pot {
+        public int amount = 0;
+        public Set<UUID> eligiblePlayers = new HashSet<>();
+    }
+    private List<Pot> pots = new ArrayList<>();
     private int currentHighestBet = 0;
+
+    private int getTotalPot() {
+        int total = pots.stream().mapToInt(p -> p.amount).sum();
+        for (UUID uuid : activePlayers) {
+            PokerPlayer p = playersData.get(uuid);
+            if (p != null) total += p.getCurrentBet();
+        }
+        return total;
+    }
 
     private List<UUID> activePlayers = new ArrayList<>();
     private Map<UUID, PokerPlayer> playersData = new HashMap<>();
@@ -64,7 +77,7 @@ public class PokerGame {
         
         activePlayers.clear();
         playersData.clear();
-        pot = 0;
+        pots.clear();
         currentHighestBet = 0;
         communityCards.clear();
         cleanup();
@@ -289,13 +302,10 @@ public class PokerGame {
         int actualAmount = Math.min(amount, p.getChips());
         p.removeChips(actualAmount);
         p.addBet(actualAmount);
-        pot += actualAmount;
         updateScoreboard(uuid, -actualAmount);
 
-        boolean isAllin = false;
         if (p.getChips() == 0) {
             p.setStatus(PokerPlayer.Status.ALLIN);
-            isAllin = true;
             broadcastActionLog(uuid, "オールイン", p.getCurrentBet());
         } else {
             broadcastActionLog(uuid, actionName, p.getCurrentBet());
@@ -303,25 +313,6 @@ public class PokerGame {
         
         if (p.getCurrentBet() > currentHighestBet) {
             currentHighestBet = p.getCurrentBet();
-        } else if (isAllin && p.getCurrentBet() < currentHighestBet) {
-            // アーリーALLIN（少ない額でのALLIN）の処理：他プレイヤーの超過ベットを返還し、最大ベット額を下げる
-            int capBet = p.getCurrentBet();
-            for (UUID u : activePlayers) {
-                PokerPlayer other = playersData.get(u);
-                if (other.getCurrentBet() > capBet) {
-                    int excess = other.getCurrentBet() - capBet;
-                    other.setCurrentBet(capBet);
-                    other.addChips(excess);
-                    pot -= excess;
-                    updateScoreboard(u, excess);
-                    Player op = Bukkit.getPlayer(u);
-                    if (op != null) {
-                        op.sendMessage(Component.text("他のプレイヤーが少ない額でオールインしたため、超過分の " + excess + " チップが返還されました。").color(NamedTextColor.YELLOW));
-                    }
-                }
-            }
-            currentHighestBet = capBet;
-            broadcast(">> 最大ベット額が " + capBet + " に制限されました。");
         }
     }
 
@@ -531,11 +522,68 @@ public class PokerGame {
         return (btnIndex + 1) % activePlayers.size();
     }
 
+    private void gatherBetsIntoPots() {
+        while (true) {
+            int minBet = Integer.MAX_VALUE;
+            for (UUID uuid : activePlayers) {
+                PokerPlayer p = playersData.get(uuid);
+                if (p.getStatus() != PokerPlayer.Status.FOLDED && p.getCurrentBet() > 0) {
+                    if (p.getCurrentBet() < minBet) {
+                        minBet = p.getCurrentBet();
+                    }
+                }
+            }
+
+            if (minBet == Integer.MAX_VALUE) {
+                int deadMoney = 0;
+                for (UUID uuid : activePlayers) {
+                    PokerPlayer p = playersData.get(uuid);
+                    if (p.getCurrentBet() > 0) {
+                        deadMoney += p.getCurrentBet();
+                        p.setCurrentBet(0);
+                    }
+                }
+                if (deadMoney > 0) {
+                    if (pots.isEmpty()) pots.add(new Pot());
+                    pots.get(pots.size() - 1).amount += deadMoney;
+                }
+                break;
+            }
+
+            Set<UUID> eligible = new HashSet<>();
+            for (UUID uuid : activePlayers) {
+                PokerPlayer p = playersData.get(uuid);
+                if (p.getStatus() != PokerPlayer.Status.FOLDED && p.getCurrentBet() >= minBet) {
+                    eligible.add(uuid);
+                }
+            }
+            
+            Pot currentPot;
+            if (pots.isEmpty() || !pots.get(pots.size() - 1).eligiblePlayers.equals(eligible)) {
+                currentPot = new Pot();
+                currentPot.eligiblePlayers = eligible;
+                pots.add(currentPot);
+            } else {
+                currentPot = pots.get(pots.size() - 1);
+            }
+
+            for (UUID uuid : activePlayers) {
+                PokerPlayer p = playersData.get(uuid);
+                if (p.getCurrentBet() > 0) {
+                    int deduct = Math.min(p.getCurrentBet(), minBet);
+                    p.setCurrentBet(p.getCurrentBet() - deduct);
+                    currentPot.amount += deduct;
+                }
+            }
+        }
+    }
+
     private void nextPhase() {
+        gatherBetsIntoPots();
+
         // 全員の現在のBETをリセットし、アクション済みフラグをリセット
         for (UUID uuid : activePlayers) {
             PokerPlayer p = playersData.get(uuid);
-            p.setCurrentBet(0);
             p.setActedInPhase(false);
         }
         currentHighestBet = 0;
@@ -659,13 +707,15 @@ public class PokerGame {
             msg = msg.append(Deck.getCardComponent(id)).append(Component.text(" "));
         }
         // カード表示の末尾にポット総額を追加
-        msg = msg.append(Component.text(" | POT: " + pot).color(NamedTextColor.WHITE));
+        msg = msg.append(Component.text(" | POT: " + getTotalPot()).color(NamedTextColor.WHITE));
         broadcastComponent(msg);
         // 共通カードをめくる音
         playSoundAll(Sound.BLOCK_NOTE_BLOCK_PLING, 0.8f, 1.0f);
     }
 
     private void endGame(boolean isShowdown) {
+        gatherBetsIntoPots();
+
         broadcast("\n=== ゲームセット ===");
         currentPlayerIndex = -1;
 
@@ -683,25 +733,28 @@ public class PokerGame {
                 .append(Component.text(Bukkit.getPlayer(winner).getName()).color(NamedTextColor.GREEN))
                 .append(Component.text("  WIN  >>>").color(NamedTextColor.GOLD));
             broadcastComponent(msg);
-            awardPot(winner, pot);
+            
+            int totalToAward = getTotalPot();
+            awardPot(winner, totalToAward);
+            pots.clear();
             promptNextGame();
         } else {
             // ショーダウン
-            showdownNextPlayer(remaining, 0, null, null);
+            Map<UUID, HandEvaluator.HandResult> results = new HashMap<>();
+            for (UUID uuid : remaining) {
+                PokerPlayer p = playersData.get(uuid);
+                List<Integer> evalCards = new ArrayList<>(p.getHand());
+                evalCards.addAll(communityCards);
+                results.put(uuid, HandEvaluator.evaluate(evalCards));
+            }
+            showdownNextPlayer(remaining, 0, results);
         }
     }
 
-    private void showdownNextPlayer(List<UUID> remaining, int index, UUID bestPlayer, HandEvaluator.HandResult bestHand) {
+    private void showdownNextPlayer(List<UUID> remaining, int index, Map<UUID, HandEvaluator.HandResult> results) {
         if (index >= remaining.size()) {
-        manager.getPlugin().getServer().getScheduler().runTaskLater(manager.getPlugin(), () -> {
-                Component msg = Component.text("\n\n>>>  ")
-                    .append(Component.text(Bukkit.getPlayer(bestPlayer).getName()).color(NamedTextColor.GREEN))
-                    .append(Component.text("  WIN").color(NamedTextColor.GOLD))
-                    .append(Component.text(" (" + bestHand.rank.name() + ")  >>>").color(NamedTextColor.WHITE));
-                broadcastComponent(msg);
-                awardPot(bestPlayer, pot);
-                // 勝利のファンファーレ
-                playSoundAll(Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+            manager.getPlugin().getServer().getScheduler().runTaskLater(manager.getPlugin(), () -> {
+                awardPots(results);
                 promptNextGame();
             }, 20L);
             return;
@@ -717,9 +770,7 @@ public class PokerGame {
             }
         }
         
-        List<Integer> evalCards = new ArrayList<>(p.getHand());
-        evalCards.addAll(communityCards);
-        HandEvaluator.HandResult result = HandEvaluator.evaluate(evalCards);
+        HandEvaluator.HandResult result = results.get(uuid);
 
         Component msg = Component.text(Bukkit.getPlayer(uuid).getName() + " : " + result.rank.name() + " (")
                 .append(Deck.getCardComponent(p.getHand().get(0))).append(Component.text(" "))
@@ -728,19 +779,102 @@ public class PokerGame {
         // 役公開音（ドラムロール的なベース音）
         playSoundAll(Sound.BLOCK_NOTE_BLOCK_BASS, 1.0f, 0.8f);
 
-        UUID nextBestPlayer = bestPlayer;
-        HandEvaluator.HandResult nextBestHand = bestHand;
-        if (bestHand == null || result.compareTo(bestHand) > 0) {
-            nextBestHand = result;
-            nextBestPlayer = uuid;
+        manager.getPlugin().getServer().getScheduler().runTaskLater(manager.getPlugin(), () -> {
+            showdownNextPlayer(remaining, index + 1, results);
+        }, 30L);
+    }
+
+    private void awardPots(Map<UUID, HandEvaluator.HandResult> results) {
+        boolean fanfared = false;
+
+        // Fallback overall best hand
+        HandEvaluator.HandResult overallBestHand = null;
+        List<UUID> overallBestPlayers = new ArrayList<>();
+        for (Map.Entry<UUID, HandEvaluator.HandResult> entry : results.entrySet()) {
+            if (overallBestHand == null) {
+                overallBestHand = entry.getValue();
+                overallBestPlayers.add(entry.getKey());
+            } else {
+                int cmp = entry.getValue().compareTo(overallBestHand);
+                if (cmp > 0) {
+                    overallBestHand = entry.getValue();
+                    overallBestPlayers.clear();
+                    overallBestPlayers.add(entry.getKey());
+                } else if (cmp == 0) {
+                    overallBestPlayers.add(entry.getKey());
+                }
+            }
         }
 
-        UUID finalNextBestPlayer = nextBestPlayer;
-        HandEvaluator.HandResult finalNextBestHand = nextBestHand;
+        for (int i = 0; i < pots.size(); i++) {
+            Pot pot = pots.get(i);
+            if (pot.amount == 0) continue;
 
-        manager.getPlugin().getServer().getScheduler().runTaskLater(manager.getPlugin(), () -> {
-            showdownNextPlayer(remaining, index + 1, finalNextBestPlayer, finalNextBestHand);
-        }, 30L);
+            List<UUID> potWinners = new ArrayList<>();
+            HandEvaluator.HandResult bestHand = null;
+
+            for (UUID uuid : pot.eligiblePlayers) {
+                if (results.containsKey(uuid)) {
+                    HandEvaluator.HandResult r = results.get(uuid);
+                    if (bestHand == null) {
+                        bestHand = r;
+                        potWinners.add(uuid);
+                    } else {
+                        int cmp = r.compareTo(bestHand);
+                        if (cmp > 0) {
+                            bestHand = r;
+                            potWinners.clear();
+                            potWinners.add(uuid);
+                        } else if (cmp == 0) {
+                            potWinners.add(uuid);
+                        }
+                    }
+                }
+            }
+
+            if (potWinners.isEmpty()) {
+                potWinners.addAll(overallBestPlayers);
+                bestHand = overallBestHand;
+            }
+
+            if (!potWinners.isEmpty()) {
+                int splitAmount = pot.amount / potWinners.size();
+                int remainder = pot.amount % potWinners.size();
+
+                String potName = pots.size() > 1 ? ((i == 0) ? "メインポット" : "サイドポット" + i) : "ポット";
+                
+                Component msg = Component.text("\n>>>  ");
+                for (int w = 0; w < potWinners.size(); w++) {
+                    UUID winnerId = potWinners.get(w);
+                    Player wp = Bukkit.getPlayer(winnerId);
+                    String name = wp != null ? wp.getName() : "Unknown";
+                    msg = msg.append(Component.text(name).color(NamedTextColor.GREEN));
+                    if (w < potWinners.size() - 1) {
+                        msg = msg.append(Component.text(" と ").color(NamedTextColor.WHITE));
+                    }
+                }
+                msg = msg.append(Component.text(" が " + potName + " を獲得").color(NamedTextColor.GOLD));
+                
+                if (potWinners.size() == 1) {
+                    msg = msg.append(Component.text(" (" + bestHand.rank.name() + ")  >>>").color(NamedTextColor.WHITE));
+                } else {
+                    msg = msg.append(Component.text(" (チョップ: " + bestHand.rank.name() + ")  >>>").color(NamedTextColor.WHITE));
+                }
+                broadcastComponent(msg);
+                
+                if (!fanfared) {
+                    playSoundAll(Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+                    fanfared = true;
+                }
+
+                for (int w = 0; w < potWinners.size(); w++) {
+                    UUID winnerId = potWinners.get(w);
+                    int winAmount = splitAmount + (w < remainder ? 1 : 0);
+                    awardPot(winnerId, winAmount);
+                }
+            }
+        }
+        pots.clear();
     }
 
     private void promptNextGame() {
