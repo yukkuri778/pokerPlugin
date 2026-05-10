@@ -349,49 +349,29 @@ public class PokerGame {
                 .color(NamedTextColor.RED)
                 .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " FOLD")));
 
-        boolean hasAllin = false;
-        for (UUID u : activePlayers) {
-            if (playersData.get(u).getStatus() == PokerPlayer.Status.ALLIN) {
-                hasAllin = true;
-                break;
-            }
-        }
-
-        if (hasAllin) {
-            if (callAmount > 0) {
-                actions = actions.append(Component.text(" [コール] ")
-                        .color(NamedTextColor.YELLOW)
-                        .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " CALL")));
-            } else {
-                actions = actions.append(Component.text(" [チェック] ")
-                        .color(NamedTextColor.GREEN)
-                        .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " CHECK")));
-            }
+        if (callAmount == 0) {
+            actions = actions.append(Component.text(" [チェック] ")
+                    .color(NamedTextColor.GREEN)
+                    .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " CHECK")));
         } else {
-            if (callAmount == 0) {
-                actions = actions.append(Component.text(" [チェック] ")
-                        .color(NamedTextColor.GREEN)
-                        .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " CHECK")));
-            } else {
-                actions = actions.append(Component.text(" [コール] ")
-                        .color(NamedTextColor.YELLOW)
-                        .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " CALL")));
-            }
-
-            if (currentHighestBet == 0) {
-                actions = actions.append(Component.text(" [ベット] ")
-                        .color(NamedTextColor.AQUA)
-                        .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " RAISE")));
-            } else {
-                actions = actions.append(Component.text(" [レイズ] ")
-                        .color(NamedTextColor.AQUA)
-                        .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " RAISE")));
-            }
-                    
-            actions = actions.append(Component.text(" [オールイン] ")
-                    .color(NamedTextColor.DARK_RED)
-                    .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " ALLIN")));
+            actions = actions.append(Component.text(" [コール] ")
+                    .color(NamedTextColor.YELLOW)
+                    .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " CALL")));
         }
+
+        if (currentHighestBet == 0) {
+            actions = actions.append(Component.text(" [ベット] ")
+                    .color(NamedTextColor.AQUA)
+                    .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " RAISE")));
+        } else {
+            actions = actions.append(Component.text(" [レイズ] ")
+                    .color(NamedTextColor.AQUA)
+                    .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " RAISE")));
+        }
+                
+        actions = actions.append(Component.text(" [オールイン] ")
+                .color(NamedTextColor.DARK_RED)
+                .clickEvent(ClickEvent.runCommand("/pokeraction " + table.getTableId() + " ALLIN")));
 
         p.sendMessage(actions);
     }
